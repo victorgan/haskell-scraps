@@ -5,14 +5,22 @@ import qualified Data.Vector as V
 -- from cassava
 import Data.Csv
 
--- a simple type alias for data
-type BaseballStats = (BL.ByteString, Int, BL.ByteString, Int)
+-- a simple type alias for data, one row of the CSV file
+type BaseballStatsRow = (BL.ByteString, Int, BL.ByteString, Int)
 
-summer (name, year, team, atBats) n = n + atBats
+fourthElement :: (t, t1, t2, t3) -> t3
+fourthElement (_, _, _, d) = d
+
+summer :: (t, t1, t2, Int) -> Int -> Int
+summer = (+) . fourthElement
+
+baseballStats :: BL.ByteString -> Either String (V.Vector BaseballStatsRow)
+baseballStats = decode NoHeader
+
+summed :: BL.ByteString -> Either String Int
+summed csvData = fmap (V.foldr summer 0) (baseballStats csvData)
 
 main :: IO ()
 main = do
   csvData <- BL.readFile "batting.csv"
-  let v = decode NoHeader csvData :: Either String (V.Vector BaseballStats)
-  let summed = fmap (V.foldr summer 0) v
-  putStrLn $ "Total atBats was: " ++ (show summed)
+  putStrLn $ "Total atBats was: " ++ (show $ summed csvData)

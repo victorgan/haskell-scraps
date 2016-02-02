@@ -1,9 +1,8 @@
 module Main where
 
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.Vector as V
--- from cassava
-import Data.Csv
+import qualified Data.Foldable as F
+import Data.Csv.Streaming -- from cassava
 
 -- a simple type alias for data, one row of the CSV file
 type BaseballStatsRow = (BL.ByteString, Int, BL.ByteString, Int)
@@ -14,11 +13,11 @@ fourthElement (_, _, _, d) = d
 summer :: (t, t1, t2, Int) -> Int -> Int
 summer = (+) . fourthElement
 
-baseballStats :: BL.ByteString -> Either String (V.Vector BaseballStatsRow)
+baseballStats :: BL.ByteString -> Records BaseballStatsRow
 baseballStats = decode NoHeader
 
-summed :: BL.ByteString -> Either String Int
-summed csvData = fmap (V.foldr summer 0) (baseballStats csvData)
+summed :: BL.ByteString -> Int
+summed = F.foldr summer 0 . baseballStats
 
 main :: IO ()
 main = do

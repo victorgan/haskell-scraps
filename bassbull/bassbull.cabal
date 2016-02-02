@@ -3,8 +3,8 @@
 
 name:                bassbull
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            Processing some csv data
+description:         Baseball data analysis
 license:             BSD3
 license-file:        LICENSE
 author:              Victor Gan
@@ -16,9 +16,11 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 executable bassbull
-  main-is:             Main.hs
-  -- other-modules:       
-  -- other-extensions:    
-  build-depends:       base >=4.8 && <4.9
+  ghc-options:         - Wall
   hs-source-dirs:      src
+  main-is:             Main.hs
+  build-depends:       base >= 4.7 && <5,
+                       bytestring,
+                       vector,
+                       cassava
   default-language:    Haskell2010

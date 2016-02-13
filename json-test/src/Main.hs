@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings, DeriveGeneric #-}
 import Data.Aeson
 import Data.Aeson.Types
-import Data.Char as Char
 import Data.List as List
 import qualified Data.Text as T
 import qualified Data.ByteString.Lazy as B
 -- import Network.HTTP.Conduit (simpleHttp)
 import GHC.Generics
 
+-------------------------------------------------------------------------------
 -- Data
 data Header = Header 
     { create :: !HeaderContent 
@@ -41,13 +41,9 @@ data ActivityBlacklist = ActivityBlacklist
 instance ToJSON ActivityBlacklist 
     where toJSON = genericToJSON defaultOptions { fieldLabelModifier = drop 9 }
 
--- Instances to convert our type to JSON.
-
-capitalizeFirst :: String -> String
-capitalizeFirst (x:xs) = (Char.toUpper x):xs
-capitalizeFirst [] = []
-
--- Instances to convert our type to JSON.
+data ActivityType = Abnormal | Blacklist | Suspicious | Leaked | Familiar | Infected
+-------------------------------------------------------------------------------
+-- Types
 type TenantId = T.Text
 type UserNumber = Integer
 type ActivityNumber = Integer
@@ -55,37 +51,27 @@ type EsId = T.Text
 type EsIndex = T.Text
 type EsActivityType = T.Text
 
-toText :: UserNumber -> T.Text
-toText = T.pack . show
-
-makeId :: TenantId -> UserNumber -> ActivityNumber -> EsId 
-makeId t u a = t `T.append` "-u-" `T.append` (toText u) `T.append` "-a-" `T.append` (toText a)
-
--- Make 
+-------------------------------------------------------------------------------
+-- Header Making
 makeHeader :: EsIndex -> EsActivityType -> EsId -> Header
 makeHeader _index _type _id = Header $ HeaderContent _index _type _id
 
+makeHeaderId :: TenantId -> UserNumber -> ActivityNumber -> EsId 
+makeHeaderId t u a = t `T.append` "-u-" `T.append` (toText u) `T.append` "-a-" `T.append` (toText a)
 
--- Aggregate
+headerActivity :: ActivityType -> (TenantId -> UserNumber -> ActivityNumber -> Header)
+headerActivity at t u a = makeHeader esIndexActivities (getEsType at) (makeHeaderId t u a)
 
-encodeBulkCommand :: ToJSON a => [a] -> B.ByteString
-encodeBulkCommand = combineByteStrings . encodeMap
-    where encodeMap = map encode
-
--------------------------------------------------------------------------------
-encodeCommand :: (ToJSON a, ToJSON b) => a -> b -> [B.ByteString]
-encodeCommand a b = [encode a, encode b];
-
-
-
-
--------------------------------------------------------------------------------
--- Where you can input teant id, usernumber and activitynumber
 headerAbnormal :: TenantId -> UserNumber -> ActivityNumber -> Header
-headerAbnormal t u a = makeHeader esIndexActivities esTypeAbnormal (makeId t u a)
+headerAbnormal = headerActivity Abnormal
 
 headerBlacklist :: TenantId -> UserNumber -> ActivityNumber -> Header
-headerBlacklist t u a = makeHeader esIndexActivities esTypeBlacklist (makeId t u a)
+headerBlacklist = headerActivity Blacklist
+
+-------------------------------------------------------------------------------
+-- Content Making
+toText :: UserNumber -> T.Text
+toText = T.pack . show
 
 contentAbnormal :: TenantId -> UserNumber -> ActivityNumber -> ActivityAbnormal
 contentAbnormal t u a = ActivityAbnormal t (toText u) (toText a) (toText u) True
@@ -93,19 +79,13 @@ contentAbnormal t u a = ActivityAbnormal t (toText u) (toText a) (toText u) True
 contentBlacklist :: TenantId -> UserNumber -> ActivityNumber -> ActivityBlacklist
 contentBlacklist t u a = ActivityBlacklist t (toText u) (toText a) (toText u) True
 
-
 -------------------------------------------------------------------------------
 -- Apply parameters
+encodeCommand :: (ToJSON a, ToJSON b) => a -> b -> [B.ByteString]
+encodeCommand a b = [encode a, encode b];
 
--- headerAbnormal2 ::  Header
--- headerAbnormal2 = headerAbnormal temptTenantId tempUserNumber
-
--- contentAbnormal2 :: ActivityAbnormal
--- contentAbnormal2 = contentAbnormal desiredTenantId tempUserNumber
-
--- commandActivity :: ToJSON a => Header -> a -> (UserNumber -> B.ByteString)
--- commandActivity h c u = combineByteStrings $ encodeCommand (h t u) (c t u)
---     where t = desiredTenantId :: TenantId
+encodeContent :: ActivityType -> TenantId -> UserNumber -> ActivityNumber -> B.ByteString
+encodeContent _ t u a = encode $ contentAbnormal t u a
 
 combineByteStrings :: [B.ByteString] -> B.ByteString 
 combineByteStrings = concatList . (List.intersperse "\n")
@@ -115,48 +95,63 @@ commandAbnormal :: UserNumber -> ActivityNumber -> B.ByteString
 commandAbnormal u a = combineByteStrings $ encodeCommand (headerAbnormal t u a) (contentAbnormal t u a)
     where t = desiredTenantId :: TenantId
 
-commandsAbnormal :: B.ByteString
-commandsAbnormal = combineByteStrings $ map (commandAbnormal u) as
-    where as = activityRange :: [ActivityNumber]
-          u = 1 :: UserNumber
+commandAbnormala :: UserNumber -> [ActivityNumber] -> B.ByteString
+commandAbnormala u as = combineByteStrings $ map (commandAbnormal u) as
+
+commandAbnormalua :: [UserNumber] -> [ActivityNumber] -> B.ByteString
+commandAbnormalua us as = combineByteStrings $ map (flip commandAbnormala as) us
+
+
+
+commandActivity :: ActivityType -> UserNumber -> ActivityNumber -> B.ByteString
+commandActivity at u a = jojo (contentAbnormal t u a)
+    where jojo content = combineByteStrings $ encodeCommand (headerActivity at t u a) content
+          t = desiredTenantId :: TenantId
+
+commandActivitya :: ActivityType -> UserNumber -> [ActivityNumber] -> B.ByteString
+commandActivitya at u as = combineByteStrings $ map (commandActivity at u) as
+
+commandActivityua :: ActivityType -> [UserNumber] -> [ActivityNumber] -> B.ByteString
+commandActivityua at us as = combineByteStrings $ map (flip (commandActivitya at) as) us
+
+
+
 
 commandBlacklist :: UserNumber -> ActivityNumber -> B.ByteString
 commandBlacklist u a = combineByteStrings $ encodeCommand (headerBlacklist t u a) (contentBlacklist t u a)
     where t = desiredTenantId :: TenantId
 
-commandsBlacklist :: B.ByteString
-commandsBlacklist = combineByteStrings $ map (commandBlacklist u) as
+commandBlacklista :: UserNumber -> B.ByteString
+commandBlacklista u = combineByteStrings $ map (commandBlacklist u) as
     where as = activityRange :: [ActivityNumber]
-          u = 1 :: UserNumber
 
+commandBlacklistua :: B.ByteString
+commandBlacklistua = combineByteStrings $ map commandBlacklista us
+    where us = userRange :: [UserNumber]
 
 commandsActivities :: B.ByteString
-commandsActivities = combineByteStrings [commandsAbnormal, commandsBlacklist]
-
--------------------------------------------------------------------------------
--- Parameters
-tempUserNumber :: Integer
-tempUserNumber = 1;
-
-filename :: FilePath
-filename = "temp.json"
+commandsActivities = combineByteStrings [(commandAbnormalua userRange activityRange), commandBlacklistua]
 
 -------------------------------------------------------------------------------
 -- Endpoint-related
+
 esIndexActivities :: EsIndex
 esIndexActivities = "processedevents_v3.2015_12"
 
-esTypeAbnormal :: EsActivityType
-esTypeAbnormal = "abnormallogin"
+getEsType :: ActivityType -> EsActivityType
+getEsType Abnormal   = "abnormallogin"
+getEsType Blacklist  = "azblacklistlogin"
+getEsType Suspicious = "azdsuspiciouslogin"
+getEsType Leaked     = "compromisedcredentials"
+getEsType Familiar   = "familiarfeatureevent"
+getEsType Infected   = "infecteddevicelogin"
 
-esTypeBlacklist :: EsActivityType
-esTypeBlacklist = "azblacklistlogin"
-
-esActivityTypes :: [EsActivityType]
-esActivityTypes = ["azblacklistlogin", "abnormallogin", "azdsuspiciouslogin", "compromisedcredentials", "familiarfeatureevent", "infecteddevicelogin"]
 
 -------------------------------------------------------------------------------
 -- Input
+filename :: FilePath
+filename = "temp.json"
+
 desiredTenantId :: T.Text
 desiredTenantId = "tenantIddummy"
 

@@ -86,12 +86,14 @@ data ActivityType = Abnormal | Blacklist | Suspicious | Leaked | Familiar | Infe
 -------------------------------------------------------------------------------
 -- Type Synonyms
 -------------------------------------------------------------------------------
+type ActivityNumber = Integer
+type ActivityParameters = (TenantId, ActivityType, UserNumber, ActivityNumber)
 type TenantId = T.Text
 type UserNumber = Integer
-type ActivityNumber = Integer
+
+type EsActivityType = T.Text
 type EsId = T.Text
 type EsIndex = T.Text
-type EsActivityType = T.Text
 
 -------------------------------------------------------------------------------
 -- Header Making
@@ -105,8 +107,8 @@ makeHeader _index _type _id = Header $ HeaderInner _index _type _id
 makeEsId :: TenantId -> UserNumber -> ActivityNumber -> EsId 
 makeEsId t u a = t `T.append` "-u-" `T.append` (toText u) `T.append` "-a-" `T.append` (toText a)
 
-headerActivity :: ActivityType -> TenantId -> UserNumber -> ActivityNumber -> Header
-headerActivity at t u a = makeHeader esIndexActivities (getEsType at) (makeEsId t u a)
+activityHeader :: ActivityParameters -> Header
+activityHeader (t, at, u, a) = makeHeader esIndexActivities (getEsType at) (makeEsId t u a)
 
 -------------------------------------------------------------------------------
 -- Content Making
@@ -114,13 +116,13 @@ headerActivity at t u a = makeHeader esIndexActivities (getEsType at) (makeEsId 
 makeUsername :: UserNumber -> T.Text
 makeUsername u = ("username-" `T.append` toText u)
 
-contentActivity :: ActivityType -> TenantId -> UserNumber -> ActivityNumber -> ActivityData
-contentActivity Abnormal t u a   = ActivityAbnormal t (toText u) (makeUsername u) (toText u) True
-contentActivity Blacklist t u a  = ActivityBlacklist t (toText u) (makeUsername u) (toText u) True
-contentActivity Suspicious t u a = ActivitySuspicious t (toText u) (makeUsername u) (toText u) True
-contentActivity Leaked t u a     = ActivityLeaked t (toText u) (makeUsername u) (toText u) True
-contentActivity Familiar t u a   = ActivityFamiliar t (toText u) (makeUsername u) (toText u) True
-contentActivity Infected t u a   = ActivityInfected t (toText u) (makeUsername u) (toText u) True
+activityContent :: ActivityParameters -> ActivityData
+activityContent (t, Abnormal  , u, a) = ActivityAbnormal   t (toText u) (makeUsername u) (toText u) True
+activityContent (t, Blacklist , u, a) = ActivityBlacklist  t (toText u) (makeUsername u) (toText u) True
+activityContent (t, Suspicious, u, a) = ActivitySuspicious t (toText u) (makeUsername u) (toText u) True
+activityContent (t, Leaked    , u, a) = ActivityLeaked     t (toText u) (makeUsername u) (toText u) True
+activityContent (t, Familiar  , u, a) = ActivityFamiliar   t (toText u) (makeUsername u) (toText u) True
+activityContent (t, Infected  , u, a) = ActivityInfected   t (toText u) (makeUsername u) (toText u) True
 
 -------------------------------------------------------------------------------
 -- Apply parameters
@@ -129,33 +131,20 @@ combineByteStrings :: [B.ByteString] -> B.ByteString
 combineByteStrings = concatList . (List.intersperse "\n")
     where concatList = foldl1 B.append
 
--- creates a single activity bytestring
-commandActivity :: ActivityType -> UserNumber -> ActivityNumber -> B.ByteString
-commandActivity at u a = combineByteStrings $ encodeCommand (headerActivity at t u a) (contentActivity at t u a)
-    where t = desiredTenantId :: TenantId
-          encodeCommand :: (ToJSON a, ToJSON b) => a -> b -> [B.ByteString]
-          encodeCommand x y = [encode x, encode y]
+activityString :: ActivityParameters -> B.ByteString
+activityString ap = combineByteStrings $ [encode (activityHeader ap), encode (activityContent ap)]
 
--- creates a bytestring with activities for a list of activity numbers
-commandActivitya :: ActivityType -> UserNumber -> [ActivityNumber] -> B.ByteString
-commandActivitya at u as = combineByteStrings $ map (commandActivity at u) as
+activityStrings :: InputParameters -> B.ByteString
+activityStrings i = combineByteStrings $ map activityString parameters
+    where parameters = parametersList i :: [ActivityParameters]
 
--- for list of activity numbers and user numbers
-commandActivityua :: ActivityType -> [UserNumber] -> [ActivityNumber] -> B.ByteString
-commandActivityua at us as = combineByteStrings $ map (flip (commandActivitya at) as) us
+-- Creates a list of activity parameters, one per JSON record
+parametersList :: InputParameters -> [ActivityParameters]
+parametersList (t, x, y) = [(t, at, u, a) | at <- ats, u <- uts, a <- as]
+    where ats = [Abnormal ..]
+          uts = [0 .. x]
+          as = [0 .. y]
 
--- for list of activity numbers user numbers, and activity types
-commandActivityatua :: [ActivityType] -> [UserNumber] -> [ActivityNumber] -> B.ByteString
-commandActivityatua ats us as = combineByteStrings $ map commandActivityua' ats
-    where commandActivityua' at = commandActivityua at us as
-
--- creates bytestrings for y activites per each x user per each activity type
-type UserCount = Integer
-type ActivityCountPerUser = Integer
-commandsActivities :: UserCount -> ActivityCountPerUser -> B.ByteString
-commandsActivities x y = commandActivityatua [Abnormal .. ] userRange activityRange
-    where userRange = [0 .. x] :: [UserNumber]
-          activityRange = [1 .. y] :: [ActivityCountPerUser]
 
 -------------------------------------------------------------------------------
 -- Endpoint-related
@@ -171,23 +160,25 @@ getEsType Leaked     = "compromisedcredentials"
 getEsType Familiar   = "familiarfeatureevent"
 getEsType Infected   = "infecteddevicelogin"
 
-desiredTenantId :: T.Text
-desiredTenantId = "tenantIddummy"
-
 esIndexRiskscore :: EsIndex
 esIndexRiskscore = "riskscoreevents"
 
 -------------------------------------------------------------------------------
 -- Let's go!
 -------------------------------------------------------------------------------
-generateActivities :: FilePath -> UserCount -> ActivityCountPerUser -> IO()
-generateActivities filename x y = B.writeFile filename $ commandsActivities x y
+type UserCount = Integer
+type ActivitiesPerUserCount = Integer
+type InputParameters = (TenantId,  UserCount, ActivitiesPerUserCount)
+
+generateActivities :: InputParameters -> IO()
+generateActivities i = B.writeFile filename $ activityStrings i
+    where filename = "temp.json"
 
 testit :: IO ()
-testit = generateActivities filename desiredUserCount desiredNumActivitiesPerUser
+testit = generateActivities (desiredTenantId, desiredUserCount, desiredNumActivitiesPerUser)
     where desiredUserCount = 4
           desiredNumActivitiesPerUser = 6
-          filename = "temp.json"
+          desiredTenantId = "tenantIddummy"
 
 -- Main
 main :: IO ()
